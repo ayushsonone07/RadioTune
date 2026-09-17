@@ -296,7 +296,6 @@ export default function AudioPlayerBar() {
         if (lyricsRequestIdRef.current !== requestId) return;
         setLyricsLoading(false);
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.videoId, activeTab]);
 
   // Reset the "scrolled" state whenever the queue isn't in view, so the
@@ -806,7 +805,7 @@ export default function AudioPlayerBar() {
                           })
                         ) : (
                           <p className="text-sm text-zinc-500 text-center mt-8">
-                            Lyrics aren't available for this track yet.
+                            Lyrics aren&apos;t available for this track yet.
                           </p>
                         );
                       })()}

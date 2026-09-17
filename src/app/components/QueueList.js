@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import Image from "next/image";
-import { X, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
+import { X, GripVertical, ChevronUp, ChevronDown, Music } from "lucide-react";
 import { playTrackAt, removeFromQueue, reorderQueue } from "../lib/features/playerSlice";
 
 // The queue mixes tracks from different sources that don't agree on a

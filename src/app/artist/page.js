@@ -52,7 +52,7 @@ function ArtistResultInner() {
     };
 
     fetch();
-  }, []);
+  }, [query]);
 
   const thumbnailUrl = artistResult?.thumbnails?.[3 || 2 || 1 || 0]?.url;
 
