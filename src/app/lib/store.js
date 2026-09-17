@@ -11,6 +11,10 @@ export const makeStore = () => {
         suggestion: suggestionReducer,
         player: playerReducer,
     },
-    middleware: (getDefaultMiddleware) => getDefaultMiddleware() 
+    middleware: (getDefaultMiddleware) => getDefaultMiddleware({
+      serializableCheck: {
+        warnAfter: 128,
+      },
+    }),
   })
 }

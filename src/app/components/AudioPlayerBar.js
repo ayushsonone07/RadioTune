@@ -112,6 +112,7 @@ export default function AudioPlayerBar() {
   const [queueScrolled, setQueueScrolled] = useState(false); // collapses the header while scrolling the queue list
 
   const ytPlayerRef = useRef(null);
+  const endedHandledRef = useRef(false); // guards against double-advancing when both the iframe's own "ended" event AND our polling fallback fire for the same track
   const lyricsRequestIdRef = useRef(0); // guards against stale/out-of-order lyric responses
   const queueScrollRef = useRef(null); // scroll container for the queue list (drives the header collapse)
   const lyricsBoxRef = useRef(null); // scroll container for the small in-place lyrics box
@@ -119,6 +120,7 @@ export default function AudioPlayerBar() {
   const autoQueuedTrackRef = useRef(null); // last track we already fetched "next songs" for — avoids refetching on every render
   const hasMountedTrackRef = useRef(false); // lets us skip auto-expand for whatever track is already loaded on first mount
   const queueRef = useRef(queue); // always-current queue snapshot, read inside async callbacks instead of the closed-over `queue` variable
+  const userPlaybackAllowedRef = useRef(false);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -129,20 +131,41 @@ export default function AudioPlayerBar() {
 
     if (isPlaying) {
       interval = setInterval(() => {
-        if (
-          ytPlayerRef.current &&
-          typeof ytPlayerRef.current.getCurrentTime === "function"
-        ) {
-          setCurrentTime(ytPlayerRef.current.getCurrentTime());
+        const player = ytPlayerRef.current;
+        if (!player || typeof player.getCurrentTime !== "function") return;
+
+        const time = player.getCurrentTime();
+        setCurrentTime(time);
+
+        // Fallback "track ended" detector. The iframe's own onStateChange
+        // ENDED (data === 0) event is delivered via the embedded player's
+        // internal timers, which browsers throttle hard once the tab is
+        // backgrounded — so in another tab it can arrive minutes late (or
+        // not at all until the tab regains focus), which is why the queue
+        // looked stuck and then "jumped" as soon as you tabbed back. This
+        // interval polls getCurrentTime/getDuration directly instead, so
+        // it keeps advancing the queue on time even while unfocused.
+        const dur =
+          typeof player.getDuration === "function" ? player.getDuration() : 0;
+        if (dur > 0 && time >= dur - 0.4 && !endedHandledRef.current) {
+          endedHandledRef.current = true;
+          if (repeatMode === "one") {
+            player.seekTo(0, true);
+            player.playVideo();
+          } else {
+            dispatch(nextTrack());
+          }
         }
       }, 1000);
     }
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentTrack]);
+  }, [isPlaying, currentTrack, repeatMode, dispatch]);
 
   useEffect(() => {
     const player = ytPlayerRef.current;
+
+    endedHandledRef.current = false; // new track — arm the end-of-track detectors again
 
     if (!player || !currentTrack?.videoId) return;
     if (typeof player.loadVideoById !== "function") return;
@@ -161,6 +184,47 @@ export default function AudioPlayerBar() {
     }
   }, [isPlaying, currentTrack?.videoId]);
 
+  // Register media controls for the current track. Media Session improves
+  // lock-screen and notification controls, but it cannot override a
+  // browser's background-autoplay policy for a YouTube iframe.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    if (!currentTrack) return;
+
+    const artUrl =
+      currentTrack?.thumbnails?.[1]?.url ||
+      (typeof currentTrack?.thumbnails === "string" ? currentTrack.thumbnails : "");
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentTrack.name || "",
+      artist: currentTrack.artist?.name || "",
+      artwork: artUrl ? [{ src: artUrl, sizes: "512x512", type: "image/jpeg" }] : [],
+    });
+
+    navigator.mediaSession.setActionHandler("play", () => dispatch(setPlaying(true)));
+    navigator.mediaSession.setActionHandler("pause", () => dispatch(setPlaying(false)));
+    navigator.mediaSession.setActionHandler("previoustrack", () => {
+      userPlaybackAllowedRef.current = true;
+      dispatch(prevTrack());
+    });
+    navigator.mediaSession.setActionHandler("nexttrack", () => {
+      userPlaybackAllowedRef.current = true;
+      dispatch(nextTrack());
+    });
+
+    return () => {
+      navigator.mediaSession.setActionHandler("play", null);
+      navigator.mediaSession.setActionHandler("pause", null);
+      navigator.mediaSession.setActionHandler("previoustrack", null);
+      navigator.mediaSession.setActionHandler("nexttrack", null);
+    };
+  }, [currentTrack, dispatch]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+  }, [isPlaying]);
+
   useEffect(() => {
     const resumePlayback = () => {
       if (document.visibilityState !== "visible" || !isPlaying) return;
@@ -172,9 +236,11 @@ export default function AudioPlayerBar() {
 
     document.addEventListener("visibilitychange", resumePlayback);
     window.addEventListener("pageshow", resumePlayback);
+    window.addEventListener("focus", resumePlayback);
     return () => {
       document.removeEventListener("visibilitychange", resumePlayback);
       window.removeEventListener("pageshow", resumePlayback);
+      window.removeEventListener("focus", resumePlayback);
     };
   }, [isPlaying]);
 
@@ -317,6 +383,8 @@ export default function AudioPlayerBar() {
     }
     if (event.data === 0) {
       // ENDED
+      if (endedHandledRef.current) return; // already handled by the polling fallback above
+      endedHandledRef.current = true;
       if (repeatMode === "one") {
         event.target.seekTo(0, true);
         event.target.playVideo();
@@ -359,7 +427,20 @@ export default function AudioPlayerBar() {
   // NOTE: shuffle is a visual toggle for now. Once playerSlice has a
   // queue/order concept, wire this to actually randomize next-track order
   // (e.g. dispatch(setShuffle(!shuffle)) and branch inside nextTrack's reducer).
-  const handleNextClick = () => dispatch(nextTrack());
+  const handleNextClick = () => {
+    userPlaybackAllowedRef.current = true;
+    dispatch(nextTrack());
+  };
+
+  const handlePrevClick = () => {
+    userPlaybackAllowedRef.current = true;
+    dispatch(prevTrack());
+  };
+
+  const togglePlayback = () => {
+    userPlaybackAllowedRef.current = true;
+    dispatch(setPlaying(!isPlaying));
+  };
 
   const cycleRepeat = () => setRepeatMode((m) => (m === "off" ? "one" : "off"));
 
@@ -474,13 +555,13 @@ export default function AudioPlayerBar() {
                   <Shuffle size={16} />
                 </button>
                 <button
-                  onClick={() => dispatch(prevTrack())}
+                  onClick={handlePrevClick}
                   className="text-zinc-400 hover:text-white"
                 >
                   <SkipBack size={18} />
                 </button>
                 <button
-                  onClick={() => dispatch(setPlaying(!isPlaying))}
+                  onClick={togglePlayback}
                   className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition"
                 >
                   {isPlaying ? (
@@ -530,7 +611,7 @@ export default function AudioPlayerBar() {
 
             {/* Mobile play button */}
             <button
-              onClick={() => dispatch(setPlaying(!isPlaying))}
+              onClick={togglePlayback}
               className="sm:hidden w-9 h-9 rounded-full bg-white text-black flex items-center justify-center shrink-0"
             >
               {isPlaying ? (
@@ -655,7 +736,7 @@ export default function AudioPlayerBar() {
                     </p>
                   </div>
                   <button
-                    onClick={() => dispatch(setPlaying(!isPlaying))}
+                    onClick={togglePlayback}
                     className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center shrink-0"
                   >
                     {isPlaying ? (
@@ -820,13 +901,13 @@ export default function AudioPlayerBar() {
                     <Shuffle size={18} />
                   </button>
                   <button
-                    onClick={() => dispatch(prevTrack())}
+                    onClick={handlePrevClick}
                     className="text-white hover:scale-105 transition"
                   >
                     <SkipBack size={24} fill="currentColor" />
                   </button>
                   <button
-                    onClick={() => dispatch(setPlaying(!isPlaying))}
+                    onClick={togglePlayback}
                     className="w-14 h-14 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition"
                   >
                     {isPlaying ? (
