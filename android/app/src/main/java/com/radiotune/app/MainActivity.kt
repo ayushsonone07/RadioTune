@@ -1,5 +1,6 @@
 package com.radiotune.app
 
+import android.content.ComponentName
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.ComponentActivity
@@ -34,7 +35,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val sessionToken = SessionToken(this, PlaybackService::class.java)
+        val sessionToken = SessionToken(
+            this,
+            ComponentName(this, PlaybackService::class.java),
+        )
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync().also { future ->
             future.addListener(
                 {
