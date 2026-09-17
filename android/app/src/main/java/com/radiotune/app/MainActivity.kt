@@ -100,7 +100,7 @@ private fun RadioTuneApp(controllerState: MutableState<MediaController?>) {
                     },
                 ) {
                     Text("Play in background")
-                )
+                }
             }
         }
     }
