@@ -144,13 +144,39 @@ export default function AudioPlayerBar() {
   useEffect(() => {
     const player = ytPlayerRef.current;
 
+    if (!player || !currentTrack?.videoId) return;
+    if (typeof player.loadVideoById !== "function") return;
+
+    player.loadVideoById(currentTrack.videoId);
+  }, [currentTrack?.videoId]);
+
+  useEffect(() => {
+    const player = ytPlayerRef.current;
+
     if (!player || typeof player.playVideo !== "function") return;
     if (isPlaying) {
       player.playVideo();
     } else {
       player.pauseVideo();
     }
-  }, [isPlaying, currentTrack]);
+  }, [isPlaying, currentTrack?.videoId]);
+
+  useEffect(() => {
+    const resumePlayback = () => {
+      if (document.visibilityState !== "visible" || !isPlaying) return;
+      const player = ytPlayerRef.current;
+      if (player && typeof player.playVideo === "function") {
+        player.playVideo();
+      }
+    };
+
+    document.addEventListener("visibilitychange", resumePlayback);
+    window.addEventListener("pageshow", resumePlayback);
+    return () => {
+      document.removeEventListener("visibilitychange", resumePlayback);
+      window.removeEventListener("pageshow", resumePlayback);
+    };
+  }, [isPlaying]);
 
   useEffect(() => {
     const player = ytPlayerRef.current;
