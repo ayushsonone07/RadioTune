@@ -14,6 +14,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        val webAppUrl = providers.gradleProperty("webAppUrl")
+            .orElse("https://YOUR-RADIOTUNE-DOMAIN.com")
+            .get()
+        buildConfigField("String", "WEB_APP_URL", "\"$webAppUrl\"")
     }
 
     buildTypes {
@@ -37,6 +42,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

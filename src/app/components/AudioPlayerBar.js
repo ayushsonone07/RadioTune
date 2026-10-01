@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import {
   setPlaying,
@@ -73,7 +73,10 @@ function normalizeNextSong(t) {
   return {
     videoId: t.videoId,
     name: t.title ?? t.name,
-    artist: { name: t.artists?.[0]?.name ?? t.artist?.name ?? "Unknown" },
+    artist: {
+      name:
+        t.artists?.[0]?.name ?? t.artists?.name ?? t.artist?.name ?? "Unknown",
+    },
     thumbnails: t.thumbnails ?? t.thumbnail,
   };
 }
@@ -93,7 +96,7 @@ export default function AudioPlayerBar() {
     },
   };
 
-  const { currentTrack, isPlaying, volume, queue } = useSelector(
+  const { currentTrack, isPlaying, volume, queue, queueIndex } = useSelector(
     (state) => state.player,
   );
 
@@ -121,10 +124,89 @@ export default function AudioPlayerBar() {
   const hasMountedTrackRef = useRef(false); // lets us skip auto-expand for whatever track is already loaded on first mount
   const queueRef = useRef(queue); // always-current queue snapshot, read inside async callbacks instead of the closed-over `queue` variable
   const userPlaybackAllowedRef = useRef(false);
+  const queueIndexRef = useRef(queueIndex);
+  const currentVideoIdRef = useRef(currentTrack?.videoId);
+  const wakeLockRef = useRef(null);
 
   useEffect(() => {
     queueRef.current = queue;
-  }, [queue]);
+    queueIndexRef.current = queueIndex;
+    currentVideoIdRef.current = currentTrack?.videoId;
+  }, [queue, queueIndex, currentTrack?.videoId]);
+
+  // Moves to the next song. If we're at the end of the queue (or the
+  // "up next" fetch hasn't landed yet / failed), fetch more songs on demand
+  // instead of silently doing nothing, which is what made playback stall.
+  const advance = useCallback(async () => {
+    const hasNext = () => queueIndexRef.current + 1 < queueRef.current.length;
+    if (hasNext()) {
+      dispatch(nextTrack());
+      return;
+    }
+    try {
+      const data = await fetchNextSongs(currentVideoIdRef.current);
+      if (hasNext()) {
+        // the auto-queue effect filled the queue while we were waiting
+        dispatch(nextTrack());
+        return;
+      }
+      const existingIds = new Set(queueRef.current.map((t) => t.videoId));
+      const fresh = (data || [])
+        .map(normalizeNextSong)
+        .filter((t) => t.videoId && !existingIds.has(t.videoId));
+      if (fresh.length) {
+        dispatch(addManyToQueue(fresh));
+        dispatch(nextTrack());
+        return;
+      }
+    } catch (err) {
+      console.error("Failed to fetch next songs", err);
+    }
+    // Nothing new to play: wrap around if there is a queue, else stop.
+    if (queueRef.current.length > 1) dispatch(nextTrack());
+    else dispatch(setPlaying(false));
+  }, [dispatch]);
+
+  // Keep the screen awake while the site is open. Wake locks are released
+  // automatically when the tab is hidden, so re-acquire on return.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    let cancelled = false;
+
+    const acquire = async () => {
+      if (document.visibilityState !== "visible" || wakeLockRef.current) return;
+      try {
+        const lock = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          lock.release().catch(() => {});
+          return;
+        }
+        wakeLockRef.current = lock;
+        lock.addEventListener("release", () => {
+          if (wakeLockRef.current === lock) wakeLockRef.current = null;
+        });
+      } catch (err) {
+        // denied (e.g. battery saver) — nothing else we can do
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") acquire();
+    };
+
+    acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    // some browsers only grant it after a user gesture, so retry on first tap
+    window.addEventListener("pointerdown", acquire);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pointerdown", acquire);
+      wakeLockRef.current?.release().catch(() => {});
+      wakeLockRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     let interval;
@@ -136,6 +218,10 @@ export default function AudioPlayerBar() {
 
         const time = player.getCurrentTime();
         setCurrentTime(time);
+
+        // Ignore stale readings from the previous video while the new one loads
+        const loadedId = player.getVideoData?.()?.video_id;
+        if (loadedId && loadedId !== currentTrack?.videoId) return;
 
         // Fallback "track ended" detector. The iframe's own onStateChange
         // ENDED (data === 0) event is delivered via the embedded player's
@@ -153,14 +239,14 @@ export default function AudioPlayerBar() {
             player.seekTo(0, true);
             player.playVideo();
           } else {
-            dispatch(nextTrack());
+            advance();
           }
         }
       }, 1000);
     }
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentTrack, repeatMode, dispatch]);
+  }, [isPlaying, currentTrack, repeatMode, advance]);
 
   useEffect(() => {
     const player = ytPlayerRef.current;
@@ -209,7 +295,7 @@ export default function AudioPlayerBar() {
     });
     navigator.mediaSession.setActionHandler("nexttrack", () => {
       userPlaybackAllowedRef.current = true;
-      dispatch(nextTrack());
+      advance();
     });
 
     return () => {
@@ -218,7 +304,7 @@ export default function AudioPlayerBar() {
       navigator.mediaSession.setActionHandler("previoustrack", null);
       navigator.mediaSession.setActionHandler("nexttrack", null);
     };
-  }, [currentTrack, dispatch]);
+  }, [currentTrack, dispatch, advance]);
 
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
@@ -389,7 +475,7 @@ export default function AudioPlayerBar() {
         event.target.playVideo();
         return;
       }
-      dispatch(nextTrack());
+      advance();
     }
   };
 
@@ -428,7 +514,7 @@ export default function AudioPlayerBar() {
   // (e.g. dispatch(setShuffle(!shuffle)) and branch inside nextTrack's reducer).
   const handleNextClick = () => {
     userPlaybackAllowedRef.current = true;
-    dispatch(nextTrack());
+    advance();
   };
 
   const handlePrevClick = () => {

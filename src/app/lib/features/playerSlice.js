@@ -31,6 +31,7 @@ const playerSlice = createSlice({
       const { tracks, startIndex = 0 } = action.payload;
       state.queue = tracks;
       state.queueIndex = startIndex;
+      state.currentTrack = tracks[startIndex] ?? state.currentTrack;
       state.isPlaying = true;
     },
 

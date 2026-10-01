@@ -22,6 +22,11 @@ const nextConfig = {
         hostname: '*.ytimg.com',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: '*.gstatic.com',
+        pathname: '/**',
+      },
     ],
   },
   async rewrites() {
